@@ -7,6 +7,8 @@
 - 세션 상태(st.session_state)만을 활용한 상태 관리
 - 모든 주석 및 UI 텍스트 한국어 표기
 - 상단 상수 정의
+- UI Rules: 필터/검색 위젯은 st.sidebar 에 배치
+- UI Rules: 목록 항목에 상태 아이콘 표시 (완료 ✅ / 미완료 ⬜)
 """
 
 import time
@@ -21,6 +23,11 @@ PAGE_TITLE: str = "스마트 할 일 관리 (To-Do)"
 PAGE_ICON: str = "📝"
 SESSION_KEY_TODOS: str = "todo_items"
 SESSION_KEY_FILTER: str = "current_filter"
+SESSION_KEY_SEARCH: str = "search_keyword"
+
+# 상태 아이콘 상수 (AGENTS.md 규칙)
+ICON_COMPLETED: str = "✅"
+ICON_INCOMPLETE: str = "⬜"
 
 # 필터 옵션 상수
 FILTER_ALL: str = "전체"
@@ -33,7 +40,8 @@ MSG_EMPTY_INPUT: str = "할 일 내용을 입력해 주세요."
 MSG_ADD_SUCCESS: str = "새로운 할 일이 추가되었습니다."
 MSG_NO_TODOS: str = "등록된 할 일이 없습니다. 새로운 할 일을 추가해 보세요!"
 MSG_NO_FILTERED_TODOS: str = "해당 조건의 할 일이 없습니다."
-INPUT_PLACEHOLDER: str = "할 일을 입력하고 Enter를 누르세요..."
+INPUT_PLACEHOLDER: str = "새로운 할 일을 입력하고 Enter를 누르세요..."
+SEARCH_PLACEHOLDER: str = "할 일 검색어 입력..."
 
 
 # ==========================================
@@ -51,11 +59,27 @@ class TodoItem(TypedDict):
 # 비즈니스 로직 함수 (Business Logic)
 # ==========================================
 def init_session_state() -> None:
-    """세션 상태 초기화 함수: 할 일 목록과 필터 상태를 준비합니다."""
+    """세션 상태 초기화 함수: 할 일 목록과 필터/검색 상태를 준비합니다."""
     if SESSION_KEY_TODOS not in st.session_state:
-        st.session_state[SESSION_KEY_TODOS] = []
+        st.session_state[SESSION_KEY_TODOS] = [
+            {
+                "id": "sample-1",
+                "title": "Streamlit 앱 기획 및 설계",
+                "completed": True,
+                "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            },
+            {
+                "id": "sample-2",
+                "title": "할 일 관리 및 사이드바 기능 구현",
+                "completed": False,
+                "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            },
+        ]
     if SESSION_KEY_FILTER not in st.session_state:
         st.session_state[SESSION_KEY_FILTER] = FILTER_ALL
+    if SESSION_KEY_SEARCH not in st.session_state:
+        st.session_state[SESSION_KEY_SEARCH] = ""
+
 
 
 def get_all_todos() -> list[TodoItem]:
@@ -109,13 +133,26 @@ def calculate_summary(todos: list[TodoItem]) -> dict[str, int]:
     }
 
 
-def filter_todos(todos: list[TodoItem], filter_option: str) -> list[TodoItem]:
-    """선택된 필터 조건(전체/미완료/완료)에 맞게 할 일 목록을 필터링합니다."""
+def filter_todos(
+    todos: list[TodoItem], filter_option: str, search_query: str = ""
+) -> list[TodoItem]:
+    """선택된 필터 조건(전체/미완료/완료) 및 검색어에 맞게 할 일 목록을 필터링합니다."""
+    filtered = todos
+
+    # 상태 필터 적용
     if filter_option == FILTER_ACTIVE:
-        return [item for item in todos if not item["completed"]]
+        filtered = [item for item in filtered if not item["completed"]]
     elif filter_option == FILTER_COMPLETED:
-        return [item for item in todos if item["completed"]]
-    return todos
+        filtered = [item for item in filtered if item["completed"]]
+
+    # 검색어 필터 적용
+    stripped_query = search_query.strip().lower()
+    if stripped_query:
+        filtered = [
+            item for item in filtered if stripped_query in item["title"].lower()
+        ]
+
+    return filtered
 
 
 # ==========================================
@@ -149,6 +186,34 @@ def render_summary_dashboard(todos: list[TodoItem]) -> None:
     st.markdown("<br>", unsafe_allow_html=True)
 
 
+def render_sidebar() -> tuple[str, str]:
+    """
+    AGENTS.md 규칙 준수: 필터 및 검색 위젯을 st.sidebar에 배치합니다.
+    선택된 필터 옵션과 검색어 문자열을 반환합니다.
+    """
+    st.sidebar.header("🔍 필터 및 검색")
+
+    # 검색 위젯
+    search_keyword = st.sidebar.text_input(
+        label="할 일 검색",
+        value=st.session_state.get(SESSION_KEY_SEARCH, ""),
+        placeholder=SEARCH_PLACEHOLDER,
+    )
+    st.session_state[SESSION_KEY_SEARCH] = search_keyword
+
+    st.sidebar.markdown("---")
+
+    # 필터 라디오 위젯
+    selected_filter = st.sidebar.radio(
+        label="상태별 보기",
+        options=FILTER_OPTIONS,
+        index=FILTER_OPTIONS.index(st.session_state.get(SESSION_KEY_FILTER, FILTER_ALL)),
+    )
+    st.session_state[SESSION_KEY_FILTER] = selected_filter
+
+    return selected_filter, search_keyword
+
+
 def render_input_form() -> None:
     """새로운 할 일을 등록할 수 있는 입력 폼을 렌더링합니다."""
     with st.form(key="add_todo_form", clear_on_submit=True):
@@ -170,24 +235,15 @@ def render_input_form() -> None:
                 st.warning(MSG_EMPTY_INPUT)
 
 
-def render_filter_bar() -> str:
-    """할 일 목록 필터링 옵션(전체/미완료/완료)을 렌더링합니다."""
-    selected_filter = st.radio(
-        label="목록 보기 옵션",
-        options=FILTER_OPTIONS,
-        horizontal=True,
-        index=FILTER_OPTIONS.index(st.session_state[SESSION_KEY_FILTER]),
-        label_visibility="collapsed",
-    )
-    st.session_state[SESSION_KEY_FILTER] = selected_filter
-    return selected_filter
-
-
 def render_todo_item(item: TodoItem) -> None:
-    """개별 할 일 카드를 렌더링하고 체크/삭제 액션을 처리합니다."""
+    """
+    개별 할 일 카드를 렌더링합니다.
+    AGENTS.md 규칙: 목록 항목에 상태 아이콘 표시 (완료 ✅ / 미완료 ⬜)
+    """
     is_completed: bool = item["completed"]
     item_id: str = item["id"]
     title_text: str = item["title"]
+    status_icon: str = ICON_COMPLETED if is_completed else ICON_INCOMPLETE
 
     with st.container(border=True):
         col_check, col_text, col_del = st.columns([0.8, 7.2, 2.0], vertical_alignment="center")
@@ -195,7 +251,7 @@ def render_todo_item(item: TodoItem) -> None:
         with col_check:
             # 체크박스 상태 변경 감지
             checked = st.checkbox(
-                label="완료 체크",
+                label=f"완료 체크 {item_id}",
                 value=is_completed,
                 key=f"check_{item_id}",
                 label_visibility="collapsed",
@@ -206,9 +262,9 @@ def render_todo_item(item: TodoItem) -> None:
 
         with col_text:
             if is_completed:
-                st.markdown(f"~~**{title_text}**~~")
+                st.markdown(f"{status_icon} ~~**{title_text}**~~")
             else:
-                st.markdown(f"**{title_text}**")
+                st.markdown(f"{status_icon} **{title_text}**")
             st.caption(f"등록일시: {item['created_at']}")
 
         with col_del:
@@ -217,7 +273,7 @@ def render_todo_item(item: TodoItem) -> None:
                 st.rerun()
 
 
-def render_todo_list() -> None:
+def render_todo_list(filter_option: str, search_query: str) -> None:
     """할 일 목록 섹션을 렌더링합니다."""
     all_todos = get_all_todos()
 
@@ -226,8 +282,7 @@ def render_todo_list() -> None:
         return
 
     st.subheader("📋 할 일 목록")
-    current_filter = render_filter_bar()
-    filtered_list = filter_todos(all_todos, current_filter)
+    filtered_list = filter_todos(all_todos, filter_option, search_query)
 
     if not filtered_list:
         st.write(f"_{MSG_NO_FILTERED_TODOS}_")
@@ -246,11 +301,14 @@ def main() -> None:
         page_title=PAGE_TITLE,
         page_icon=PAGE_ICON,
         layout="centered",
-        initial_sidebar_state="collapsed",
+        initial_sidebar_state="expanded",
     )
 
     # 세션 상태 초기화
     init_session_state()
+
+    # 사이드바 필터 및 검색 렌더링 (AGENTS.md 규칙)
+    current_filter, search_query = render_sidebar()
 
     # 상단 헤더
     render_header()
@@ -264,8 +322,8 @@ def main() -> None:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # 할 일 목록 및 관리 섹션
-    render_todo_list()
+    # 할 일 목록 및 관리 섹션 (사이드바 필터/검색 연동)
+    render_todo_list(current_filter, search_query)
 
 
 if __name__ == "__main__":
